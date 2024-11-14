@@ -1,0 +1,86 @@
+#version: '3.8'
+
+services:
+  zookeeper:
+    image: zookeeper:3.6.2
+    hostname: zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: server.1=zookeeper:2888:3888
+
+  spark-master:
+    build:
+      context: ../docker/master
+      dockerfile: Dockerfile
+    image: spark-master:latest
+    hostname: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_DRIVER_HOST=spark-master
+      - SPARK_HOME=/opt/spark
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+      - SPARK_LOG_DIR=/opt/spark/logs
+      - SPARK_NETWORK_MAXREMOTEFRAMESIZE=2047
+      - SPARK_RPC_MESSAGE_MAXSIZE=2047
+      - spark.network.frameSize=2047
+      - SPARK_EVENTLOG_ENABLED=true
+      - SPARK_EVENTLOG_DIR=/tmp/spark-events
+    ports:
+      - "8080:8080"  # Spark UI
+      - "7077:7077"  # Spark master port
+    networks:
+      - spark-network
+    volumes:
+      - ../data:/opt/spark-data  # Mount data directory
+      - ../spark-app:/opt/spark-app
+      - ../config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ../logs:/opt/spark/logs
+      - ../benchmarks:/benchmarks
+      - /tmp/spark-events:/tmp/spark-events  # Mount log directory for event logs
+
+  spark-worker:
+    build:
+      context: ../docker/worker
+      dockerfile: Dockerfile
+    image: spark-worker:latest
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_HOME=/opt/spark
+      - SPARK_NETWORK_MAXREMOTEFRAMESIZE=2047
+      - SPARK_RPC_MESSAGE_MAXSIZE=2047
+      - spark.network.frameSize=2047
+      - SPARK_WORKER_MEMORY=1G
+      - SPARK_WORKER_CORES=1 
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: on-failure
+    networks:
+      - spark-network
+    volumes:
+      - ../data:/opt/spark-data
+      - ../config/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf
+      - ../logs:/opt/spark/logs
+      - /tmp/spark-events:/tmp/spark-events
+    ports:
+    - "8081-8090:8081"   # Exposes ports 8081 to 8090 on the host for multiple workers
+    deploy:
+      restart_policy:
+        condition: on-failure
+
+networks:
+  spark-network:
+    driver: bridge
+    external: true
